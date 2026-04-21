@@ -1,0 +1,22 @@
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+print(ROOT_DIR)
+
+
+class Settings(BaseSettings):
+    APP_NAME: str
+    APP_VERSION: str
+
+    FILE_ALLOWED_TYPE: list
+    FILE_MAX_SIZE: int
+
+    FILE_DEFAULT_CHUNK_SIZE: int
+    model_config = SettingsConfigDict(env_file="D:\plant-expert-chatbot\.env")
+
+
+def get_settings():
+    return Settings()
