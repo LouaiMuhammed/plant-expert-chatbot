@@ -44,7 +44,7 @@ class DataController(BaseController):
             random_key + "_" + cleaned_file_name
             )
             
-        return new_file_path , "_", cleaned_file_name
+        return new_file_path 
 
 
     def get_clean_file_name(self, orig_file_name: str):

@@ -59,3 +59,5 @@ typing_extensions==4.15.0
 uvicorn==0.44.0
 watchfiles==1.1.1
 websockets==16.0
+langchain==1.2.15
+PyMuPDF==1.24.3
