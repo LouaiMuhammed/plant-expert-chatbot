@@ -5,3 +5,4 @@ class DataBaseEnum(Enum):
     COLLECTION_PROJECT_NAME = "projects"
     COLLECTION_CHUNK_NAME = "chunks"
     COLLECTION_FILE_NAME = "files"
+    COLLECTION_ASSET_NAME = "assets"
