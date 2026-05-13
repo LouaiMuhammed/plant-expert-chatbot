@@ -19,7 +19,10 @@ class Settings(BaseSettings):
     MONGODB_URL: str
     MONGODB_DATABASE: str
     
-    model_config = SettingsConfigDict(env_file="D:\plant-expert-chatbot\.env")
+    model_config = SettingsConfigDict(
+        env_file=r"D:\plant-expert-chatbot\.env",
+        extra="ignore",
+    )
 
 def get_settings():
     return Settings()

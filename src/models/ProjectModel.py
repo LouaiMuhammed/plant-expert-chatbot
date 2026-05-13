@@ -1,7 +1,7 @@
 from .BaseDataModel import BaseDataModel
 from .db_schemes import Project
 from .enums.DatabaseEnums import DataBaseEnum
-
+from motor.motor_asyncio import AsyncIOMotorClient
 
 class ProjectModel(BaseDataModel):
 
@@ -9,6 +9,21 @@ class ProjectModel(BaseDataModel):
         super().__init__(db_client = db_client)
         self.collection = self.db_client[DataBaseEnum.COLLECTION_PROJECT_NAME.value]
 
+    async def init_collection(self):
+        self.collection = self.db_client[DataBaseEnum.COLLECTION_PROJECT_NAME.value]
+        indexes = Project.get_indexes()
+        for index in indexes:
+            await self.collection.create_index(
+                index["key"],
+                name=index["name"],
+                unique=index["unique"]
+            )
+
+    @classmethod
+    async def create_instance(cls, db_client: object):
+        instance = cls(db_client)
+        await instance.init_collection()
+        return instance
 
     async def create_project(self, project: Project):
 

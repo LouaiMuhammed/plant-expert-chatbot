@@ -27,19 +27,12 @@ async def upload_data(request: Request, project_id: str, file: UploadFile,
     uploaded_file_model = UploadedFileModel(
         db_client=request.app.db_client
     )
-    project_collection = request.app.db_client[DataBaseEnum.COLLECTION_PROJECT_NAME.value]
-
-    project = await project_collection.find_one({
-        "project_id": project_id
-    })
-    if project is None:
-        project_result = await project_collection.insert_one({
-            "project_id": project_id
-        })
-        project = {
-            "_id": project_result.inserted_id,
-            "project_id": project_id
-        }
+    project_model = await ProjectModel.create_instance(
+        db_client=request.app.db_client
+    )
+    project = await project_model.get_project_or_create_one(
+        project_id=project_id
+    )
 
     data_controller = DataController()
     is_valid, result_signal = data_controller.validate_uploded_file(file=file)
@@ -68,7 +61,7 @@ async def upload_data(request: Request, project_id: str, file: UploadFile,
             status_code = status.HTTP_400_BAD_REQUEST,
             content={
                 "signal" : ResponseSignal.FILE_UPLOAD_FAILED.value,
-                "project_id": str(project["_id"])
+                "project_id": str(project.id)
             
             } 
         )
@@ -77,7 +70,7 @@ async def upload_data(request: Request, project_id: str, file: UploadFile,
     try:
         uploaded_file = await uploaded_file_model.create_file_record(
             UploadedFile(
-                project_id=project["_id"],
+                project_id=project.id,
                 original_file_name=file.filename,
                 stored_file_name=stored_file_name,
                 file_path=file_path
@@ -91,7 +84,7 @@ async def upload_data(request: Request, project_id: str, file: UploadFile,
             status_code=status.HTTP_400_BAD_REQUEST,
             content={
                 "signal": ResponseSignal.FILE_UPLOAD_FAILED.value,
-                "project_id": str(project["_id"])
+                "project_id": str(project.id)
             }
         )
 
@@ -99,7 +92,7 @@ async def upload_data(request: Request, project_id: str, file: UploadFile,
             content={
                 "signal" : ResponseSignal.FILE_UPLOAD_SUCCESS.value,
                 "file_id": uploaded_file.stored_file_name,
-                "project_id": str(project["_id"]),
+                "project_id": str(project.id),
                 "upload_id": str(uploaded_file._id)
             } 
         )
@@ -114,7 +107,7 @@ async def process_endpoint(request: Request, project_id: str, process_request: P
     do_reset = process_request.do_reset
 
 
-    project_model = ProjectModel(
+    project_model = await ProjectModel.create_instance(
         db_client=request.app.db_client
     )
 
@@ -163,7 +156,7 @@ async def process_endpoint(request: Request, project_id: str, process_request: P
         for i, chunk in enumerate(file_chunks)
     ]
 
-    chunk_model = ChunkModel(
+    chunk_model = await ChunkModel.create_instance(
     db_client=request.app.db_client
 
     )
