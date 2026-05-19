@@ -18,11 +18,29 @@ class Settings(BaseSettings):
     
     MONGODB_URL: str
     MONGODB_DATABASE: str
-    
+
+
+    GENERATION_BACKEND: str
+    EMBEDDING_BACKEND: str
+
+    OPENAI_API_KEY: str = None
+    OPENAI_API_URL: str = None
+    COHERE_API_KEY: str = None
+
+    GENERATION_MODEL_ID: str = None
+    EMBEDDING_MODEL_ID: str = None
+    EMBEDDING_MODEL_SIZE: int
+
+
+    INPUT_DEFAULT_MAX_CHARACTERS : int = None
+    GENERATION_DEFAULT_MAX_TOKENS: int = None
+    GENERATION_DEFAULT_TEMPERATURE: float = None
+        
     model_config = SettingsConfigDict(
         env_file=r"D:\plant-expert-chatbot\.env",
         extra="ignore",
     )
+
 
 def get_settings():
     return Settings()

@@ -14,7 +14,7 @@ class OpeeAIProvider(LLMInterface):
         self.api_url = api_url
 
         self.default_input_max_characters = default_input_max_characters
-        self.default_output_max_characters = default_input_max_characters
+        self.default_output_max_characters = default_output_max_characters
         self.default_generation_temperature = default_generation_temperature
         
         self.generation_model_id = None
