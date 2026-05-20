@@ -15,7 +15,7 @@ class CoHereEnums(Enum):
     USER = "USER"
     ASSISTANT = "CHATBOT"
     
-    DOCUMENT = "search_documnet"
+    DOCUMENT = "search_document"
     QUERY = "search_query" 
 
 class DocumentTypeEnum(Enum):

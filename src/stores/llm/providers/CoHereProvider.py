@@ -11,15 +11,15 @@ class CoHereProvider(LLMInterface):
         self.api_key = api_key
 
         self.default_input_max_characters = default_input_max_characters
-        self.default_output_max_characters = default_input_max_characters
+        self.default_output_max_characters = default_output_max_characters
         self.default_generation_temperature = default_generation_temperature
         
         self.generation_model_id = None
         
-        self.set_embedding_model_id = None
+        self.embedding_model_id = None
         self.embedding_size = None
 
-        self.client = cohere.client(api_key=self.api_key)
+        self.client = cohere.Client(api_key=self.api_key)
 
         self.logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class CoHereProvider(LLMInterface):
             self.logger.error("Generation model for Cohere was not set")
             return None
         
-        max_output_tokens = max_output_tokens if max_output_tokens is not None else self.default_generation_max_output_tokens
+        max_output_tokens = max_output_tokens if max_output_tokens is not None else self.default_output_max_characters
         temperature = temperature if temperature is not None else self.default_generation_temperature
             
         response = self.client.chat(
@@ -73,12 +73,12 @@ class CoHereProvider(LLMInterface):
             return None
         
         input_type = CoHereEnums.DOCUMENT.value
-        if document_type == DocumentTypeEnum.QUERY:
+        if document_type == DocumentTypeEnum.QUERY.value:
             input_type= CoHereEnums.QUERY.value
 
         response = self.client.embed(
             model = self.embedding_model_id,
-            text = [self.process_text(text)],
+            texts = [self.process_text(text)],
             input_type = input_type,
             embedding_types=['float']
         )
@@ -88,6 +88,32 @@ class CoHereProvider(LLMInterface):
             return None
         
         return response.embeddings.float[0]
+
+    def embed_texts(self, texts: list, document_type: str = None):
+        if not self.client:
+            self.logger.error("CoHere client was not set")
+            return None
+
+        if not self.embedding_model_id:
+            self.logger.error("Embedding model for CoHere was not set")
+            return None
+
+        input_type = CoHereEnums.DOCUMENT.value
+        if document_type == DocumentTypeEnum.QUERY.value:
+            input_type = CoHereEnums.QUERY.value
+
+        response = self.client.embed(
+            model=self.embedding_model_id,
+            texts=[self.process_text(text) for text in texts],
+            input_type=input_type,
+            embedding_types=['float']
+        )
+
+        if not response or not response.embeddings or not response.embeddings.float:
+            self.logger.error("Error while embedding batch with CoHere")
+            return None
+
+        return response.embeddings.float
 
     def construct_prompt(self, prompt: str, role: str):
         return {

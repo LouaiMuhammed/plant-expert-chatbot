@@ -3,7 +3,7 @@ from .providers import OpenAIProvider, CoHereProvider
 
 class LLMProviderFactory:
     def __init__(self, config: dict):
-        self.config = self.config
+        self.config = config
 
     def create(self, provider: str):
         if provider == LLMEnums.OPENAI.value:

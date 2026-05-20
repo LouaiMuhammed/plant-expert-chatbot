@@ -20,6 +20,12 @@ class LLMInterface(ABC):
     def embed_text(self, text: str, document: str = None):
         pass
 
+    def embed_texts(self, texts: list, document_type: str = None):
+        return [
+            self.embed_text(text=text, document=document_type)
+            for text in texts
+        ]
+
     @abstractmethod
     def construct_prompt(self, prompt: str, role: str):
         pass
