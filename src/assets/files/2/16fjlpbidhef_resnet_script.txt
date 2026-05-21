@@ -1,0 +1,342 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import torch
+
+
+from torchvision.datasets import ImageFolder
+
+# Changed to use pre-split directory structure
+data_dir = "data1"
+train_dir = "data1/train"
+val_dir = "data1/val"
+
+# Load train and val datasets separately
+train_dataset_base = ImageFolder(root=train_dir, transform=None)
+val_dataset_base = ImageFolder(root=val_dir, transform=None)
+
+# Get classes from training set
+classes = train_dataset_base.classes
+num_classes = len(classes)
+
+print("Classes:", classes)
+print("Number of training images:", len(train_dataset_base))
+print("Number of validation images:", len(val_dataset_base))
+
+# --------------------------------------------------------------------
+
+from collections import Counter
+
+# Get training class distribution directly from the dataset
+train_labels = [label for _, label in train_dataset_base.imgs]
+class_counts = Counter(train_labels)
+
+print("\nTraining class distribution:")
+for cls_idx, count in class_counts.items():
+    print(f"{classes[cls_idx]:35s}: {count}")
+
+# --------------------------------------------------------------------
+
+RARE_THRESHOLD = 200
+
+rare_classes = {
+    cls_idx for cls_idx, count in class_counts.items()
+    if count < RARE_THRESHOLD
+}
+
+print("\nRare classes:")
+for cls_idx in rare_classes:
+    print(classes[cls_idx])
+
+# --------------------------------------------------------------------
+
+from torchvision import transforms
+
+light_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.RandomHorizontalFlip(p=0.3),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
+
+strong_transform = transforms.Compose([
+    transforms.RandomResizedCrop(224, scale=(0.7, 1.0)),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.RandomRotation(20),
+    transforms.ColorJitter(
+        brightness=0.3,
+        contrast=0.3,
+        saturation=0.3,
+        hue=0.1
+    ),
+    transforms.RandomAffine(
+        degrees=0,
+        translate=(0.05, 0.05),
+        scale=(0.9, 1.1)
+    ),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
+
+val_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
+
+# --------------------------------------------------------------------
+
+from torch.utils.data import Dataset
+
+class ClassAwareDataset(Dataset):
+    def __init__(self, base_dataset, rare_classes,
+                 light_transform, strong_transform):
+        self.base_dataset = base_dataset
+        self.rare_classes = rare_classes
+        self.light_transform = light_transform
+        self.strong_transform = strong_transform
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    def __getitem__(self, idx):
+        path, label = self.base_dataset.samples[idx]
+        img = self.base_dataset.loader(path)  # ALWAYS PIL Image
+
+        if label in self.rare_classes:
+            img = self.strong_transform(img)
+        else:
+            img = self.light_transform(img)
+
+        return img, label
+
+# --------------------------------------------------------------------
+
+# Create class-aware training dataset
+train_dataset = ClassAwareDataset(
+    train_dataset_base,
+    rare_classes,
+    light_transform,
+    strong_transform
+)
+
+# Create validation dataset with val_transform
+val_dataset = ImageFolder(root=val_dir, transform=val_transform)
+
+# --------------------------------------------------------------------
+
+from torch.utils.data import WeightedRandomSampler
+
+class_weights = np.zeros(num_classes)
+for cls_idx, count in class_counts.items():
+    class_weights[cls_idx] = 1.0 / count
+
+class_weights = class_weights / class_weights.sum()
+
+sample_weights = [
+    class_weights[label] for label in train_labels
+]
+
+sample_weights = torch.DoubleTensor(sample_weights)
+
+sampler = WeightedRandomSampler(
+    weights=sample_weights,
+    num_samples=len(sample_weights),
+    replacement=True
+)
+
+# --------------------------------------------------------------------
+
+from torch.utils.data import DataLoader
+
+batch_size = 64
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=batch_size,
+    sampler=sampler,
+    num_workers=0,
+    pin_memory=True
+)
+
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=64,
+    shuffle=False,  # Avoids Learning order bias
+    num_workers=4,  # For faster loading
+    pin_memory=True  # For faster GPU transfer
+)
+
+# --------------------------------------------------------------------
+
+import os
+
+print("\nTraining set class counts:")
+for idx, class_name in enumerate(classes):
+    class_path = os.path.join(train_dir, class_name)
+    count = len(os.listdir(class_path)) if os.path.isdir(class_path) else 0
+    print(f"{class_name:35} : {count:5d}")
+
+print("\nValidation set class counts:")
+for idx, class_name in enumerate(classes):
+    class_path = os.path.join(val_dir, class_name)
+    count = len(os.listdir(class_path)) if os.path.isdir(class_path) else 0
+    print(f"{class_name:35} : {count:5d}")
+
+# --------------------------------------------------------------------
+
+import torch.nn as nn
+
+
+from torchvision import models
+
+def get_model(num_classes):
+    model = models.resnet18(weights="IMAGENET1K_V1")
+
+    # Freeze feature extractor
+    for param in model.parameters():
+        param.requires_grad = False
+
+    for param in model.fc.parameters():
+        param.requires_grad = True
+    
+    # Replace classifier
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+
+    return model
+
+# --------------------------------------------------------------------
+
+from sklearn.metrics import classification_report, confusion_matrix
+
+def evaluate(model, dataloader, device):
+    model.eval()
+
+    y_true = []
+    y_pred = []
+
+    with torch.no_grad():
+        for images, labels in dataloader:
+            images = images.to(device)
+            labels = labels.to(device)
+
+            outputs = model(images)
+            preds = torch.argmax(outputs, dim=1)
+
+            y_true.extend(labels.cpu().numpy())
+            y_pred.extend(preds.cpu().numpy())
+
+    print(classification_report(y_true, y_pred))
+    print("Confusion Matrix:\n", confusion_matrix(y_true, y_pred))
+
+# --------------------------------------------------------------------
+
+import torch.optim as optim
+
+# Early stopping class (assuming it's defined elsewhere in your project)
+class EarlyStopping:
+    def __init__(self, patience=5, min_delta=0.001, verbose=True):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.verbose = verbose
+        self.counter = 0
+        self.best_loss = None
+        
+    def __call__(self, val_loss):
+        if self.best_loss is None:
+            self.best_loss = val_loss
+        elif val_loss > self.best_loss - self.min_delta:
+            self.counter += 1
+            if self.verbose:
+                print(f'EarlyStopping counter: {self.counter}/{self.patience}')
+            if self.counter >= self.patience:
+                return True
+        else:
+            self.best_loss = val_loss
+            self.counter = 0
+        return False
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = get_model(num_classes).to(device)
+
+# Compute class weights (inverse frequency) from training data
+class_counts_array = np.bincount(train_labels)
+weights = 1.0 / (class_counts_array + 1e-6)
+weights = torch.tensor(weights, dtype=torch.float32).to(device)
+
+criterion = nn.CrossEntropyLoss(weight=weights)
+
+optimizer = torch.optim.Adam([
+    {'params': model.fc.parameters(), 'lr': 1e-3},        # head (fast)
+    {'params': model.layer4.parameters(), 'lr': 1e-4}     # backbone (slow)
+])
+
+early_stopping = EarlyStopping(patience=5, min_delta=0.001, verbose=True)
+
+num_epochs = 15
+best_val_acc = 0.0
+train_losses, val_losses = [], []
+train_accs, val_accs = [], []
+
+for epoch in range(num_epochs):
+    model.train()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+    for images, labels in train_loader:
+        images, labels = images.to(device), labels.to(device)
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item() * images.size(0)
+        _, predicted = torch.max(outputs, 1)
+        correct += (predicted == labels).sum().item()
+        total += labels.size(0)
+    train_loss = running_loss / total
+    train_acc = correct / total
+    train_losses.append(train_loss)
+    train_accs.append(train_acc)
+    
+    # Validation
+    model.eval()
+    val_running_loss = 0.0
+    val_correct = 0
+    val_total = 0
+    with torch.no_grad():
+        for images, labels in val_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            val_running_loss += loss.item() * images.size(0)
+            _, predicted = torch.max(outputs, 1)
+            val_correct += (predicted == labels).sum().item()
+            val_total += labels.size(0)
+    val_loss = val_running_loss / val_total
+    val_acc = val_correct / val_total
+    val_losses.append(val_loss)
+    val_accs.append(val_acc)
+    
+    if val_acc > best_val_acc:
+        best_val_acc = val_acc
+        torch.save(model.state_dict(), "ResNet_model.pth")
+    
+    print(f"Epoch {epoch+1}/{num_epochs} | Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
+    
+    # Early stopping check
+    if early_stopping(val_loss):
+        print(f"\nEarly stopping triggered at epoch {epoch+1}")
+        break
+
+print(f"\nTraining completed! Best validation accuracy: {best_val_acc:.4f}")

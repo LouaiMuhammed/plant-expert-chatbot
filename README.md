@@ -42,3 +42,17 @@ $ cp .env.example .env
 ```
 
 Set your environment variables in the `.env` file.
+
+## Docker
+
+This project should be run with the modern Docker Compose CLI:
+
+```bash
+docker compose -f docker/docker_compose.yml up -d
+```
+
+Notes:
+
+- `docker-compose` may not exist on newer Docker Desktop installs. Use `docker compose` instead.
+- The compose file lives at `docker/docker_compose.yml`, so `-f` is required.
+- If `docker` is not recognized, install Docker Desktop and reopen your terminal so `docker` is added to `PATH`.

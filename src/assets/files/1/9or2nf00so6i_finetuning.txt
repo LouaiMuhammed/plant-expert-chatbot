@@ -1,0 +1,235 @@
+# Class-specific thresholds (edit these based on your confusion patterns)
+DEFAULT_CONF_THRESHOLD = 0.75
+DEFAULT_MARGIN_THRESHOLD = 0.15
+
+CLASS_THRESHOLDS = {
+    # Stricter for classes that are often confused
+    'citrus_black_spot': {'conf': 0.82, 'margin': 0.22},
+    'citrus_foliage_damage': {'conf': 0.82, 'margin': 0.20},
+    'citrus_mealybugs': {'conf': 0.80, 'margin': 0.20},
+    'citrus_greening': {'conf': 0.80, 'margin': 0.20},
+
+    # Slightly looser for stable classes (optional)
+    'mango_healthy': {'conf': 0.72, 'margin': 0.12},
+}
+
+
+def get_thresholds_for_prediction(predicted_class):
+    th = CLASS_THRESHOLDS.get(predicted_class)
+    if th is None:
+        return DEFAULT_CONF_THRESHOLD, DEFAULT_MARGIN_THRESHOLD
+    return th['conf'], th['margin']
+
+
+-------------------------------------------------------------
+
+
+from torchvision import transforms
+from PIL import Image
+import torch
+import torch.nn.functional as F
+from src.transforms import get_val_transform
+
+
+def _tta_variants(pil_img):
+    # Keep augmentations label-preserving and mild
+    return [
+        pil_img,
+        pil_img.transpose(Image.FLIP_LEFT_RIGHT),
+        pil_img.rotate(8),
+        pil_img.rotate(-8),
+    ]
+
+
+def predict_with_uncertainty_tta(
+    image_path,
+    model,
+    idx_to_class,
+    device,
+    temperature=1.0,
+    default_conf_threshold=0.75,
+    default_margin_threshold=0.15,
+    class_thresholds=None,
+    use_tta=True,
+):
+    img = Image.open(image_path).convert('RGB')
+    transform = get_val_transform()
+
+    with torch.no_grad():
+        if use_tta:
+            variants = _tta_variants(img)
+            probs_list = []
+            for v in variants:
+                x = transform(v).unsqueeze(0).to(device)
+                logits = model(x)
+                probs_list.append(F.softmax(logits / temperature, dim=1))
+            probs = torch.mean(torch.cat(probs_list, dim=0), dim=0)
+        else:
+            x = transform(img).unsqueeze(0).to(device)
+            logits = model(x)
+            probs = F.softmax(logits / temperature, dim=1).squeeze(0)
+
+    top2_probs, top2_idx = torch.topk(probs, k=2)
+    top1_conf = float(top2_probs[0].item())
+    top2_conf = float(top2_probs[1].item())
+    margin = top1_conf - top2_conf
+
+    pred_idx = int(top2_idx[0].item())
+    pred_class = idx_to_class[pred_idx]
+
+    conf_th = default_conf_threshold
+    margin_th = default_margin_threshold
+    if class_thresholds is not None:
+        conf_th, margin_th = get_thresholds_for_prediction(pred_class)
+
+    uncertain = (top1_conf < conf_th) or (margin < margin_th)
+
+    return {
+        'predicted_class': pred_class,
+        'predicted_index': pred_idx,
+        'confidence': top1_conf,
+        'second_best_class': idx_to_class[int(top2_idx[1].item())],
+        'second_best_confidence': top2_conf,
+        'margin': margin,
+        'conf_threshold_used': conf_th,
+        'margin_threshold_used': margin_th,
+        'uncertain': bool(uncertain),
+        'decision': 'uncertain' if uncertain else 'accept',
+        'tta_used': bool(use_tta),
+    }
+
+-----------------------------------------------------------
+
+
+import os
+import numpy as np
+
+
+def evaluate_holdout_with_params(
+    holdout_root,
+    model,
+    idx_to_class,
+    device,
+    temperature,
+    conf_threshold,
+    margin_threshold,
+    class_thresholds=None,
+    use_tta=True,
+):
+    class_to_idx = {c: i for i, c in enumerate(idx_to_class)}
+    image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
+
+    total = 0
+    accepted = 0
+    correct_accepted = 0
+
+    for class_name in sorted(os.listdir(holdout_root)):
+        class_dir = os.path.join(holdout_root, class_name)
+        if not os.path.isdir(class_dir) or class_name not in class_to_idx:
+            continue
+
+        for fn in os.listdir(class_dir):
+            if not fn.lower().endswith(image_exts):
+                continue
+            total += 1
+
+            out = predict_with_uncertainty_tta(
+                image_path=os.path.join(class_dir, fn),
+                model=model,
+                idx_to_class=idx_to_class,
+                device=device,
+                temperature=temperature,
+                default_conf_threshold=conf_threshold,
+                default_margin_threshold=margin_threshold,
+                class_thresholds=class_thresholds,
+                use_tta=use_tta,
+            )
+
+            if not out['uncertain']:
+                accepted += 1
+                if out['predicted_class'] == class_name:
+                    correct_accepted += 1
+
+    if total == 0:
+        raise ValueError(f'No images found under: {holdout_root}')
+
+    accepted_rate = accepted / total
+    reject_rate = 1.0 - accepted_rate
+    accepted_acc = (correct_accepted / accepted) if accepted > 0 else 0.0
+
+    return {
+        'conf_threshold': conf_threshold,
+        'margin_threshold': margin_threshold,
+        'accepted_rate': accepted_rate,
+        'reject_rate': reject_rate,
+        'accepted_accuracy': accepted_acc,
+        'coverage_x_accuracy': accepted_rate * accepted_acc,
+    }
+
+
+def grid_search_thresholds(
+    holdout_root,
+    model,
+    idx_to_class,
+    device,
+    temperature=1.0,
+    conf_grid=(0.70, 0.75, 0.80, 0.85),
+    margin_grid=(0.10, 0.15, 0.20, 0.25),
+    class_thresholds=None,
+    use_tta=True,
+):
+    rows = []
+    for c in conf_grid:
+        for m in margin_grid:
+            rows.append(
+                evaluate_holdout_with_params(
+                    holdout_root=holdout_root,
+                    model=model,
+                    idx_to_class=idx_to_class,
+                    device=device,
+                    temperature=temperature,
+                    conf_threshold=float(c),
+                    margin_threshold=float(m),
+                    class_thresholds=class_thresholds,
+                    use_tta=use_tta,
+                )
+            )
+
+    import pandas as pd
+    df = pd.DataFrame(rows)
+    df = df.sort_values(['accepted_accuracy', 'coverage_x_accuracy'], ascending=False)
+    return df
+
+
+print('Threshold grid search ready')
+print("Example:")
+print("df_tune = grid_search_thresholds(r'C:/path/to/holdout', model, idx_to_class_runtime, device, temperature=temperature_opt, class_thresholds=CLASS_THRESHOLDS, use_tta=True)")
+print("df_tune.head(10)")
+
+==output==
+Threshold grid search ready
+Example:
+df_tune = grid_search_thresholds(r'C:/path/to/holdout', model, idx_to_class_runtime, device, temperature=temperature_opt, class_thresholds=CLASS_THRESHOLDS, use_tta=True)
+df_tune.head(10)
+
+
+-----------------------------------------------------------------------------
+
+# Example single-image usage with TTA + class-specific thresholds
+sample_path = r'C:/Users/loaim/OneDrive/Desktop/img2.jpeg'
+out = predict_with_uncertainty_tta(
+    image_path=sample_path,
+    model=model,
+    idx_to_class=idx_to_class_runtime,
+    device=device,
+    temperature=temperature_opt,
+    default_conf_threshold=DEFAULT_CONF_THRESHOLD,
+    default_margin_threshold=DEFAULT_MARGIN_THRESHOLD,
+    class_thresholds=CLASS_THRESHOLDS,
+    use_tta=True,
+)
+print(out)
+
+
+==out==
+{'predicted_class': 'mango_healthy', 'predicted_index': 12, 'confidence': 0.4501095116138458, 'second_best_class': 'citrus_melanose', 'second_best_confidence': 0.430547297000885, 'margin': 0.019562214612960815, 'conf_threshold_used': 0.72, 'margin_threshold_used': 0.12, 'uncertain': True, 'decision': 'uncertain', 'tta_used': True}
