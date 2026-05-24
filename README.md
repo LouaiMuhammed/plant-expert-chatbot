@@ -12,8 +12,7 @@
 1. Clone the repository
 
 ```bash
-git clone <your-repo-url>
-cd plant-disease-detection-using-cnns
+git clone <https://github.com/LouaiMuhammed plant-expert-chatbot.git>
 ```
 
 2. Create and activate a virtual environment
