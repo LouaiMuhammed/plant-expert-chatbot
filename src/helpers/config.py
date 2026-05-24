@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     VECTOR_DB_DISTANCE_METHOD: str = None
 
     
+
+    DEFAULT_LANG: str = "en"
+    PRIMARY_LANG: str = "en"
+
+
     model_config = SettingsConfigDict(
         env_file=r"D:\plant-expert-chatbot\.env",
         extra="ignore",
